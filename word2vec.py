@@ -362,6 +362,10 @@ class Word2Vec(object):
     print("Data file: ", opts.train_data)
     print("Vocab size: ", opts.vocab_size - 1, " + UNK")
     print("Words per epoch: ", opts.words_per_epoch)
+
+
+    import pdb; pdb.set_trace()
+    
     self._examples = examples
     self._labels = labels
     self._id2word = opts.vocab_words

@@ -129,6 +129,7 @@ class Options(object):
     # The text file for eval.
     self.eval_data = FLAGS.eval_data
 
+
 batch_size = 3
 def generate_batch(batch_size, num_skips, skip_window):
     global data_index
@@ -139,6 +140,7 @@ def generate_batch(batch_size, num_skips, skip_window):
     labels = np.array([546, 456, 233], dtype=np.int32).reshape([batch_size, 1])
     return phrases, words, labels
 
+
 class Phrase2Vec(object):
 
     def __init__(self, options, session):
@@ -147,12 +149,9 @@ class Phrase2Vec(object):
         self._word2id = {}
         self._id2word = []
         self.load_pretrained_word2vec()
+        # print (self._session.run(self.wrd_emb))    
         self.build_graph()
-        tf.global_variables_initializer().run()
-
-        # self.word2vec = Word2Vec(opts, session)
-        # self.build_eval_graph()
-        # self.save_vocab()
+        # print (self._session.run(self.wrd_emb))    
 
     def load_pretrained_word2vec(self):
 
@@ -169,17 +168,6 @@ class Phrase2Vec(object):
         self._options.wrd_dim =  wrd_emb.shape[1]
         print("embedding loaded.")
 
-    # # build my graph
-    # def build_graph(self):
-    #     self._id2word = opts.vocab_words
-    #     for i, w in enumerate(self._id2word):
-    #         self._word2id[w] = i
-    #     true_logits, sampled_logits = self.forward(examples, labels)
-    #     loss = self.nce_loss(true_logits, sampled_logits)
-    #     tf.scalar_summary("NCE loss", loss)
-    #     self._loss = loss
-    #     self.optimize(loss)
-    #     return None
 
     # load word2vec part with "trainable" false
     def train(self):
@@ -208,55 +196,33 @@ class Phrase2Vec(object):
 
         opts = self._options
 
-        # Input data.
-        self.phr_examples = tf.placeholder(tf.int32, shape=[batch_size])  
-        self.wrd_examples = tf.placeholder(tf.int32, shape=[batch_size])
-        self.labels = tf.placeholder(tf.int32, shape=[batch_size, 1])
+        # Input data
+        self.phr_examples = tf.placeholder(tf.int32, shape=[batch_size], name="phr_examples")  
+        self.wrd_examples = tf.placeholder(tf.int32, shape=[batch_size], name="wrd_examples")
+        self.labels = tf.placeholder(tf.int32, shape=[batch_size, 1], name="labels")
 
-        init_width = 0.5 / 200 # yw. temp
-        self.phr_emb = tf.Variable(
-            tf.random_uniform([opts.phr_size, opts.phr_dim], -init_width, init_width),
-            name="pr_emb")
-        
+        # In `concatenate` mode, total embedding is phr_dim + wrd_dim 
         emb_dim = opts.phr_dim + opts.wrd_dim
+        
+        # Phrase weights
+        init_width = 0.5 / opts.phr_dim
+        self.phr_emb = tf.Variable(tf.random_uniform([opts.phr_size, opts.phr_dim], -init_width, init_width), name="pr_emb")
+
+        # Softmax weights (NCE)
+        nce_weights = tf.Variable(tf.truncated_normal([opts.vocabulary_size, emb_dim], stddev=1.0 / math.sqrt(emb_dim)), name="nce_W")
+        nce_biases = tf.Variable(tf.zeros([opts.vocabulary_size]), name="nce_b")
+
+        # Global step: scalar, i.e., shape [].
+        self.global_step = tf.Variable(0, name="global_step")
+        
+        # Variable initialize, and then, load word weights
+        tf.variables_initializer([self.phr_emb, nce_weights, nce_biases, self.global_step], name='init').run()
+        # tf.global_variables_initializer().run()
         
         # Embeddings for examples: [batch_size, emb_dim]
         example_phr_emb = tf.nn.embedding_lookup(self.phr_emb, self.phr_examples)
         example_wrd_emb = tf.nn.embedding_lookup(self.wrd_emb, self.wrd_examples)
-        embed = tf.concat(1, [example_phr_emb, example_wrd_emb])
-
-        # Softmax weight: [vocab_size, emb_dim]. Transposed.
-        # sm_w_t = tf.Variable(
-            # tf.zeros([opts.phr_size, opts.emb_dim]), name="sm_w_t")
-
-        # Softmax bias: [emb_dim].
-        # sm_b = tf.Variable(tf.zeros([opts.phr_size]), name="sm_b")
-
-        # Global step: scalar, i.e., shape [].
-        self.global_step = tf.Variable(0, name="global_step")
-
-        #     # Nodes to compute the nce loss w/ candidate sampling.
-        # labels_matrix = tf.reshape(tf.cast(labels, dtype=tf.int64), [opts.batch_size, 1])
-
-        # # Negative sampling.
-        # sampled_ids, _, _ = (tf.nn.fixed_unigram_candidate_sampler(
-        #     true_classes=labels_matrix,
-        #     num_true=1,
-        #     num_sampled=opts.num_samples,
-        #     unique=True,
-        #     range_max=opts.vocab_size,
-        #     distortion=0.75,
-        #     unigrams=opts.vocab_counts.tolist()))
-
-
-
-        # Construct the variables for the NCE loss
-        # nce_weights = tf.Variable(
-            # tf.truncated_normal([vocabulary_size, emb_dim],
-                                # stddev=1.0 / math.sqrt(emb_dim)))
-
-        nce_weights = tf.Variable(tf.zeros([opts.vocabulary_size, emb_dim]))
-        nce_biases = tf.Variable(tf.zeros([opts.vocabulary_size]))
+        embed = tf.concat(1, [example_phr_emb, example_wrd_emb], name="emb")
 
         loss = tf.reduce_mean(
             tf.nn.nce_loss(weights=nce_weights,
@@ -267,6 +233,7 @@ class Phrase2Vec(object):
                         num_classes=opts.vocabulary_size))
 
         # Construct the SGD optimizer using a learning rate of 1.0.
+        # We only train phrase weights, softmax weights, and NOT word weights.
         optimizer = tf.train.GradientDescentOptimizer(1.0)
         trainer = optimizer.minimize(loss,
                                    global_step=self.global_step,
@@ -275,39 +242,6 @@ class Phrase2Vec(object):
 
         self.loss = loss
         self.trainer = trainer
-
-    def nce_loss(self, true_logits, sampled_logits):
-        """Build the graph for the NCE loss."""
-
-        # cross-entropy(logits, labels)
-        opts = self._options
-        true_xent = tf.nn.sigmoid_cross_entropy_with_logits(
-            true_logits, tf.ones_like(true_logits))
-        sampled_xent = tf.nn.sigmoid_cross_entropy_with_logits(
-            sampled_logits, tf.zeros_like(sampled_logits))
-
-        # NCE-loss is the sum of the true and noise (sampled words)
-        # contributions, averaged over the batch.
-        nce_loss_tensor = (tf.reduce_sum(true_xent) +
-                           tf.reduce_sum(sampled_xent)) / opts.batch_size
-        return nce_loss_tensor
-
-    # def optimize(self, loss):
-    #     """Build the graph to optimize the loss function."""
-
-    #     # Optimizer nodes.
-    #     # Linear learning rate decay.
-    #     opts = self._options
-    #     words_to_train = float(opts.words_per_epoch * opts.epochs_to_train)
-    #     lr = opts.learning_rate * tf.maximum(
-    #         0.0001, 1.0 - tf.cast(self._words, tf.float32) / words_to_train)
-    #     self._lr = lr
-    #     optimizer = tf.train.GradientDescentOptimizer(lr)
-    #     train = optimizer.minimize(loss,
-    #                                global_step=self.global_step,
-    #                                gate_gradients=optimizer.GATE_NONE)
-    #     self._train = train
-
 
 
 def main():
@@ -324,14 +258,7 @@ def main():
     with tf.Graph().as_default(), tf.Session() as session:
 
         model = Phrase2Vec(opts, session)
-        # print (session.run(model.wrd_emb))        
-        model.load_pretrained_word2vec()
-        # print (session.run(model.wrd_emb))
         model.train()
-
-    # for _ in xrange(opts.epochs_to_train):
-        # model.train()  # Process one epoch
-        # model.eval()  # Eval analogies.
 
     # # Perform a final save.
     # model.saver.save(session,
