@@ -160,7 +160,7 @@ class Phrase2Vec(object):
         saver.restore(self._session, ckpt)
         print("model restored.")
 
-        all_var_names = [v.name for v in tf.all_variables()]
+        all_var_names = [v.name for v in tf.global_variables()]
         assert "emb:0" in all_var_names
         self.wrd_emb = tf.get_default_graph().get_tensor_by_name("emb:0")
         wrd_emb = self._session.run(self.wrd_emb)
@@ -196,52 +196,57 @@ class Phrase2Vec(object):
 
         opts = self._options
 
-        # Input data
-        self.phr_examples = tf.placeholder(tf.int32, shape=[batch_size], name="phr_examples")  
-        self.wrd_examples = tf.placeholder(tf.int32, shape=[batch_size], name="wrd_examples")
-        self.labels = tf.placeholder(tf.int32, shape=[batch_size, 1], name="labels")
+        with tf.name_scope("phr"):
 
-        # In `concatenate` mode, total embedding is phr_dim + wrd_dim 
-        emb_dim = opts.phr_dim + opts.wrd_dim
-        
-        # Phrase weights
-        init_width = 0.5 / opts.phr_dim
-        self.phr_emb = tf.Variable(tf.random_uniform([opts.phr_size, opts.phr_dim], -init_width, init_width), name="pr_emb")
+            # Input data
+            self.phr_examples = tf.placeholder(tf.int32, shape=[batch_size], name="phr_examples")  
+            self.wrd_examples = tf.placeholder(tf.int32, shape=[batch_size], name="wrd_examples")
+            self.labels = tf.placeholder(tf.int32, shape=[batch_size, 1], name="labels")
 
-        # Softmax weights (NCE)
-        nce_weights = tf.Variable(tf.truncated_normal([opts.vocabulary_size, emb_dim], stddev=1.0 / math.sqrt(emb_dim)), name="nce_W")
-        nce_biases = tf.Variable(tf.zeros([opts.vocabulary_size]), name="nce_b")
+            # In `concatenate` mode, total embedding is phr_dim + wrd_dim 
+            emb_dim = opts.phr_dim + opts.wrd_dim
+            
+            # Phrase weights
+            init_width = 0.5 / opts.phr_dim
+            self.phr_emb = tf.Variable(tf.random_uniform([opts.phr_size, opts.phr_dim], -init_width, init_width), name="pr_emb")
 
-        # Global step: scalar, i.e., shape [].
-        self.global_step = tf.Variable(0, name="global_step")
-        
-        # Variable initialize, and then, load word weights
-        tf.variables_initializer([self.phr_emb, nce_weights, nce_biases, self.global_step], name='init').run()
-        # tf.global_variables_initializer().run()
-        
-        # Embeddings for examples: [batch_size, emb_dim]
-        example_phr_emb = tf.nn.embedding_lookup(self.phr_emb, self.phr_examples)
-        example_wrd_emb = tf.nn.embedding_lookup(self.wrd_emb, self.wrd_examples)
-        embed = tf.concat(1, [example_phr_emb, example_wrd_emb], name="emb")
+            # Softmax weights (NCE)
+            nce_weights = tf.Variable(tf.truncated_normal([opts.vocabulary_size, emb_dim], stddev=1.0 / math.sqrt(emb_dim)), name="nce_W")
+            nce_biases = tf.Variable(tf.zeros([opts.vocabulary_size]), name="nce_b")
 
-        loss = tf.reduce_mean(
-            tf.nn.nce_loss(weights=nce_weights,
-                        biases=nce_biases,
-                        labels=self.labels,
-                        inputs=embed,
-                        num_sampled=opts.num_sampled,
-                        num_classes=opts.vocabulary_size))
+            # Global step: scalar, i.e., shape [].
+            self.global_step = tf.Variable(0, name="global_step")
+            
+            # Variable initialize, and then, load word weights
+            tf.variables_initializer([self.phr_emb, nce_weights, nce_biases, self.global_step], name='init').run()
+            # tf.global_variables_initializer().run()
+            
+            # Embeddings for examples: [batch_size, emb_dim]
+            example_phr_emb = tf.nn.embedding_lookup(self.phr_emb, self.phr_examples)
+            example_wrd_emb = tf.nn.embedding_lookup(self.wrd_emb, self.wrd_examples)
+            embed = tf.concat(1, [example_phr_emb, example_wrd_emb], name="combined")
 
-        # Construct the SGD optimizer using a learning rate of 1.0.
-        # We only train phrase weights, softmax weights, and NOT word weights.
-        optimizer = tf.train.GradientDescentOptimizer(1.0)
-        trainer = optimizer.minimize(loss,
-                                   global_step=self.global_step,
-                                   gate_gradients=optimizer.GATE_NONE,
-                                   var_list=[self.phr_emb, nce_weights, nce_biases])
+            loss = tf.reduce_mean(
+                tf.nn.nce_loss(weights=nce_weights,
+                            biases=nce_biases,
+                            labels=self.labels,
+                            inputs=embed,
+                            num_sampled=opts.num_sampled,
+                            num_classes=opts.vocabulary_size), name="nceloss")
+
+            # Construct the SGD optimizer using a learning rate of 1.0.
+            # We only train phrase weights, softmax weights, and NOT word weights.
+            optimizer = tf.train.GradientDescentOptimizer(1.0)
+            trainer = optimizer.minimize(loss,
+                                       global_step=self.global_step,
+                                       gate_gradients=optimizer.GATE_NONE,
+                                       var_list=[self.phr_emb, nce_weights, nce_biases])
 
         self.loss = loss
         self.trainer = trainer
+
+        writer = tf.summary.FileWriter('save', graph=tf.get_default_graph())
+        writer.close()
 
 
 def main():
