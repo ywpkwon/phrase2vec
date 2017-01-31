@@ -16,6 +16,9 @@ import tensorflow as tf
 from word2vec import Word2Vec
 from tensorflow.models.embedding import gen_word2vec as word2vec
 
+from ConceptManager import ConceptManager as CM
+
+
 flags = tf.app.flags
 
 # flags.DEFINE_string("save_path", None, "Directory to write the model and "
@@ -130,15 +133,57 @@ class Options(object):
     self.eval_data = FLAGS.eval_data
 
 
-batch_size = 3
-def generate_batch(batch_size, num_skips, skip_window):
-    global data_index
+# batch_size = 3
+# def generate_batch(batch_size, num_skips, skip_window):
+#     global data_index
 
-    # just fixed examples for now
-    phrases = np.array([0, 0, 0], dtype=np.int32)
-    words = np.array([123, 432, 234], dtype=np.int32)
-    labels = np.array([546, 456, 233], dtype=np.int32).reshape([batch_size, 1])
-    return phrases, words, labels
+#     # just fixed examples for now
+#     phrases = np.array([0, 0, 0], dtype=np.int32)
+#     words = np.array([123, 432, 234], dtype=np.int32)
+#     labels = np.array([546, 456, 233], dtype=np.int32).reshape([batch_size, 1])
+#     return phrases, words, labels
+
+def generate_batch(batch_size, window_size):
+    """Generate batch
+
+    Returns:
+    para_examples, word_examples, labels
+    para_examples:[para_id]
+    word_examples:[word_id*(window_size-1)]
+    labels: word_id
+    """ 
+
+    #para_examples: [para_id]
+    para_examples = np.ndarray(shape=(batch_size,1), dtype=np.int32)
+
+    #word_examples: [word_id*(window_size-1)]
+    word_examples = np.ndarray(shape=(batch_size,window_size - 1), dtype=np.int32)
+    labels = np.ndarray(shape=(batch_size,1),dtype=np.int32)
+    paragraph = self.concept_list[self.para_index].fullConcept()
+    for i in range(batch_size):
+        
+        # if there is enough words for this sample
+        while (self.word_index + window_size) > len(paragraph):
+            self.para_index = (self.para_index + 1) % len(self.concept_list)
+            self.word_index = 0
+            paragraph = self.concept_list[self.para_index].fullConcept()
+         
+        para_examples[i][0] = self.para_index
+
+        for j in range(window_size - 1):
+            # print self.word_dictionary[paragraph[self.word_index+j].lower()]
+            # print Embedding.wordVec(paragraph[self.word_index+j].lower())
+
+            # word_examples[i][j] = self.word_dictionary[paragraph[self.word_index+j].lower()]
+            word_examples[i][j] = Embedding.wordIndex(paragraph[self.word_index+j].lower())
+        # labels[i] = self.word_dictionary[paragraph[self.word_index+window_size-1].lower()]
+        try:
+            labels[i] = Embedding.wordIndex(paragraph[self.word_index+window_size-1].lower())
+        except:
+            import pdb; pdb.set_trace()
+        self.word_index = self.word_index + 1
+
+    return para_examples, word_examples, labels
 
 
 class Phrase2Vec(object):
@@ -172,10 +217,10 @@ class Phrase2Vec(object):
     # load word2vec part with "trainable" false
     def train(self):
 
-        num_skips = 0; skip_window = 0; # yw. temp. for now
+        batch_size = 5; window_size = 3
 
-        for step in range(1000):
-            phrases, words, labels = generate_batch(batch_size, num_skips, skip_window)
+        for step in range(20000):
+            phrases, words, labels = generate_batch(opts.batch_size, opts.window_size)
 
             # for i in range(phrases.size):
             #     print(phrases[i], words[i], '->', labels[i])
@@ -186,6 +231,7 @@ class Phrase2Vec(object):
             #         '->', labels[i], reverse_dictionary[labels[i]])
 
             feed_dict = {self.phr_examples:phrases, self.wrd_examples:words, self.labels:labels}
+            import pdb; pdb.set_trace()
             _, loss_val = self._session.run([self.trainer, self.loss], feed_dict=feed_dict)
 
             if step % 100 == 0:
